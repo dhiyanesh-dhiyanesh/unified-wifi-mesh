@@ -346,6 +346,10 @@ void em_t::proto_process(unsigned char *data, unsigned int len)
                 em_configuration_t::process_msg(data, len);
             } else if (m_sm.get_state() == em_state_ctrl_sta_steer_pending) {
                 em_steering_t::process_msg(data, len);
+            } else if (m_sm.get_state() == em_state_ctrl_set_policy_pending) {
+               em_policy_cfg_t::handle_1905_ack(data, len);
+            } else if (m_sm.get_state() == em_state_ctrl_channel_scan_pending) {
+               em_channel_t::handle_1905_ack(data, len);
             }
             break;
 

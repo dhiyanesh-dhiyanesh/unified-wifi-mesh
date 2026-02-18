@@ -428,6 +428,19 @@ public:
 	 * @note Ensure the buffer is properly initialized before calling this function.
 	 */
 	int handle_channel_scan_req(unsigned char *buff, unsigned int len);
+	/**!
+	 * @brief Sends a 1905 acknowledgment message.
+	 *
+	 * This function is responsible for sending an acknowledgment message
+	 *
+	 * @param[in] msg_id The message ID of the original message being acknowledged.
+	 *
+	 * @returns int
+	 * @retval length of buffer on success
+	 * @retval 0 on failure
+	 *
+	 */
+	int handle_1905_ack(unsigned char *buff, unsigned int len);
     
 	/**!
 	 * @brief Handles the channel scan report.
@@ -755,6 +768,8 @@ public:
 	 * @note This is a virtual destructor, allowing for proper cleanup of derived classes.
 	 */
 	virtual ~em_channel_t();
+
+	int send_1905_ack_message(unsigned short msg_id);
 
 };
 

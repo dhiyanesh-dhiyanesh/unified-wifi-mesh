@@ -440,6 +440,12 @@ int em_policy_cfg_t::send_policy_cfg_request_msg()
     cmdu->last_frag_ind = 1;
     cmdu->relay_ind = 0;
 
+    em_cmd_ctx_t *ctx = dm->get_cmd_ctx();
+    if (ctx) {
+        ctx->msg_id = cmdu->id;
+        dm->set_cmd_ctx(ctx);
+    }
+
     tmp += sizeof(em_cmdu_t);
     len += sizeof(em_cmdu_t);
 
@@ -547,6 +553,21 @@ int em_policy_cfg_t::send_policy_cfg_request_msg()
 
 }
 
+int em_policy_cfg_t::handle_1905_ack(unsigned char *buff, unsigned int len)
+{
+    dm_easy_mesh_t *dm;
+
+    dm = get_data_model();
+    em_cmdu_t *cmdu = reinterpret_cast<em_cmdu_t *> (buff + sizeof(em_raw_hdr_t));
+    unsigned short response_msg_id = ntohs(cmdu->id);
+
+    em_cmd_ctx_t *ctx = dm->get_cmd_ctx();
+
+    if (ntohs(ctx->msg_id) != response_msg_id) {
+           return -1;
+    }
+}
+
 int em_policy_cfg_t::handle_policy_cfg_req(unsigned char *buff, unsigned int len)
 {
     em_policy_cfg_params_t policy;
@@ -562,6 +583,8 @@ int em_policy_cfg_t::handle_policy_cfg_req(unsigned char *buff, unsigned int len
     tlv = reinterpret_cast<em_tlv_t *> (buff + sizeof(em_raw_hdr_t) + sizeof(em_cmdu_t));
     tlv_len = len - static_cast<unsigned int> (sizeof(em_raw_hdr_t) + sizeof(em_cmdu_t));
     em_printfout("Handling Policy Cfg Request Msg len=%d, tlv_len=%d", len, tlv_len);
+
+    em_cmdu_t *cmdu = reinterpret_cast<em_cmdu_t *>(buff + sizeof(em_raw_hdr_t));
 
     while ((tlv->type != em_tlv_type_eom) && (tlv_len > 0)) {
         if (tlv->type == em_tlv_type_steering_policy) {
@@ -681,7 +704,67 @@ int em_policy_cfg_t::handle_policy_cfg_req(unsigned char *buff, unsigned int len
 
     get_mgr()->io_process(em_bus_event_type_set_policy, reinterpret_cast<unsigned char *> (&policy), sizeof(policy));
 
+    send_1905_ack_message(ntohs(cmdu->id));
+
     return 0;
+}
+
+int em_policy_cfg_t::send_1905_ack_message(unsigned short msg_id)
+{
+    unsigned char buff[MAX_EM_BUFF_SZ];
+    char *errors[EM_MAX_TLV_MEMBERS] = {0};
+    unsigned short  msg_type = em_msg_type_1905_ack;
+    unsigned int len = 0;
+    em_cmdu_t *cmdu;
+    em_tlv_t *tlv;
+    unsigned char *tmp = buff;
+    unsigned short type = htons(ETH_P_1905);
+    dm_easy_mesh_t *dm = get_data_model();
+
+    memcpy(tmp, dm->get_ctrl_al_interface_mac(), sizeof(mac_address_t));
+
+    tmp += sizeof(mac_address_t);
+    len += static_cast<unsigned int> (sizeof(mac_address_t));
+
+    memcpy(tmp, dm->get_agent_al_interface_mac(), sizeof(mac_address_t));
+
+    tmp += sizeof(mac_address_t);
+    len += static_cast<unsigned int> (sizeof(mac_address_t));
+
+    memcpy(tmp, reinterpret_cast<unsigned char *> (&type), sizeof(unsigned short));
+    tmp += sizeof(unsigned short);
+    len += sizeof(unsigned short);
+
+    cmdu = reinterpret_cast<em_cmdu_t *> (tmp);
+
+    memset(tmp, 0, sizeof(em_cmdu_t));
+    cmdu->type = htons(msg_type);
+    cmdu->id = htons(msg_id);
+    cmdu->last_frag_ind = 1;
+
+    tmp += sizeof(em_cmdu_t);
+    len += sizeof(em_cmdu_t);
+
+    // End of message
+    tlv = reinterpret_cast<em_tlv_t *> (tmp);
+    tlv->type = em_tlv_type_eom;
+    tlv->len = 0;
+
+    tmp += (sizeof (em_tlv_t));
+    len += static_cast<unsigned int> (sizeof (em_tlv_t));
+
+    if (em_msg_t(em_msg_type_1905_ack, em_profile_type_3, buff, len).validate(errors) == 0) {
+        em_printfout("1905 ACK validation failed\n");
+        return 0;
+    }
+
+    if (send_frame(buff, len)  < 0) {
+        em_printfout("1905 ACK send failed, error:%d\n", errno);
+        return 0;
+    }
+    em_printfout("1905 ACK send success\n");
+
+    return static_cast<int> (len);
 }
 
 void em_policy_cfg_t::process_msg(unsigned char *data, unsigned int len)
@@ -709,7 +792,6 @@ void em_policy_cfg_t::process_ctrl_state()
     switch (get_state()) {
 		case em_state_ctrl_set_policy_pending:
         	send_policy_cfg_request_msg();
-			set_state(em_state_ctrl_configured);
             break;
 
         default:
