@@ -147,6 +147,71 @@ int em_channel_t::send_1905_ack_message(unsigned short msg_id)
     return static_cast<int> (len);
 }
 
+int em_channel_t::send_1905_ack_message_for_chan_scan(unsigned short msg_id)
+{
+    unsigned char buff[MAX_EM_BUFF_SZ];
+    char *errors[EM_MAX_TLV_MEMBERS] = {0};
+    unsigned short  msg_type = em_msg_type_1905_ack;
+    unsigned int len = 0;
+    em_cmdu_t *cmdu;
+    em_tlv_t *tlv;
+    unsigned char *tmp = buff;
+    unsigned short type = htons(ETH_P_1905);
+    dm_easy_mesh_t *dm = get_data_model();
+
+    memcpy(tmp, dm->get_ctrl_al_interface_mac(), sizeof(mac_address_t));
+    mac_addr_str_t ctrl_mac_str;
+    dm_easy_mesh_t::macbytes_to_string(dm->get_ctrl_al_interface_mac(), ctrl_mac_str);
+    printf("dhiyanesh CTRL AL MAC for channel = %s\n", ctrl_mac_str);
+
+    tmp += sizeof(mac_address_t);
+    len += static_cast<unsigned int> (sizeof(mac_address_t));
+
+    memcpy(tmp, dm->get_agent_al_interface_mac(), sizeof(mac_address_t));
+    mac_addr_str_t agent_mac_str;
+    dm_easy_mesh_t::macbytes_to_string(dm->get_agent_al_interface_mac(), agent_mac_str);
+    printf("dhiyanesh AGENT AL MAC for channel = %s\n", agent_mac_str);
+
+    tmp += sizeof(mac_address_t);
+    len += static_cast<unsigned int> (sizeof(mac_address_t));
+
+    memcpy(tmp, reinterpret_cast<unsigned char *> (&type), sizeof(unsigned short));
+    tmp += sizeof(unsigned short);
+    len += static_cast<unsigned int> (sizeof(unsigned short));
+    
+    cmdu = reinterpret_cast<em_cmdu_t *> (tmp);
+
+    memset(tmp, 0, sizeof(em_cmdu_t));
+    cmdu->type = htons(msg_type);
+    cmdu->id = htons(msg_id);
+    cmdu->last_frag_ind = 1;
+
+    tmp += sizeof(em_cmdu_t);
+    len += static_cast<unsigned int> (sizeof(em_cmdu_t));
+
+    // End of message
+    tlv = reinterpret_cast<em_tlv_t *> (tmp);
+    tlv->type = em_tlv_type_eom;
+    tlv->len = 0;
+
+    tmp += (sizeof (em_tlv_t));
+    len += static_cast<unsigned int> (sizeof (em_tlv_t));
+
+    if (em_msg_t(em_msg_type_1905_ack, em_profile_type_3, buff, len).validate(errors) == 0) {
+        em_printfout("%s:%d: 1905 ACK validation failed\n", __func__, __LINE__);
+        return 0;
+    }
+
+    if (send_frame(buff, len)  < 0) {
+        em_printfout("%s:%d: 1905 ACK send failed, error:%d\n", __func__, __LINE__, errno);
+        return 0;
+    }
+
+    em_printfout("%s:%d: 1905 ACK send success\n", __func__, __LINE__);
+
+    return static_cast<int> (len);
+}
+
 short em_channel_t::create_channel_scan_req_tlv(unsigned char *buff)
 {
     short len = 0;
@@ -290,6 +355,13 @@ int em_channel_t::send_channel_scan_request_msg()
     memset(tmp, 0, sizeof(em_cmdu_t));
     cmdu->type = htons(msg_type);
     cmdu->id = htons(get_mgr()->get_next_msg_id());
+    /*
+    em_cmd_ctx_t *ctx = dm->get_cmd_ctx();
+    if (ctx) {
+        ctx->msg_id = ntohs(cmdu->id);
+        dm->set_cmd_ctx(ctx);
+    }*/
+
     cmdu->last_frag_ind = 1;
     cmdu->relay_ind = 0;
 
@@ -322,8 +394,8 @@ int em_channel_t::send_channel_scan_request_msg()
         return -1;
     }
 
-	set_state(em_state_ctrl_configured);
-
+    m_chan_req_msg_id = ntohs(cmdu->id);
+    printf("dhiyanesh m_chan_req_msg_id in channel_scan_req (hex) = 0x%04hx\n", m_chan_req_msg_id);
     return  static_cast<int> (len);
 
 }
@@ -693,7 +765,7 @@ int em_channel_t::send_channel_sel_request_msg()
         printf("%s:%d: Channel Selection Request msg failed, error:%d\n", __func__, __LINE__, errno);
         return -1;
     }
-    m_chan_sel_req_msg_id = ntohs(cmdu->id);
+    m_chan_req_msg_id = ntohs(cmdu->id);
 
     return static_cast<int> (len);
 
@@ -1720,9 +1792,9 @@ int em_channel_t::handle_channel_sel_rsp(unsigned char *buff, unsigned int len)
             dm_easy_mesh_t::macbytes_to_string(ruid, mac_str);
             em_t *radio_em = reinterpret_cast<em_t *>(hash_map_get(get_mgr()->m_em_map, mac_str));
             if (radio_em) {
-                if((radio_em->get_state() == em_state_ctrl_channel_select_pending) && (response_msg_id == radio_em->m_chan_sel_req_msg_id)) {
+                if((radio_em->get_state() == em_state_ctrl_channel_select_pending) && (response_msg_id == radio_em->m_chan_req_msg_id)) {
                     radio_em->set_state(em_state_ctrl_channel_selected);
-                    radio_em->m_chan_sel_req_msg_id = 0;
+                    radio_em->m_chan_req_msg_id = 0;
                     em_printfout("Set em_state_ctrl_channel_selected for radio %s", mac_str);
                 }
             } else {
@@ -1767,6 +1839,53 @@ int em_channel_t::handle_operating_channel_rprt(unsigned char *buff, unsigned in
     return 0;
 }
 
+int em_channel_t::handle_1905_ack(unsigned char *buff, unsigned int len)
+{
+    dm_easy_mesh_t *dm;
+
+    std::vector<em_t *> em_radios;
+    dm = get_data_model();
+    em_cmdu_t *cmdu = reinterpret_cast<em_cmdu_t *> (buff + sizeof(em_raw_hdr_t));
+    unsigned short response_msg_id = ntohs(cmdu->id);
+
+    em_cmd_ctx_t *ctx = dm->get_cmd_ctx();
+    em_raw_hdr_t *hdr = reinterpret_cast<em_raw_hdr_t *>(buff);
+    get_mgr()->get_all_em_for_al_mac(hdr->src, em_radios);
+    printf("dhiyanesh outside for loop in handle_1905_ack of channel\n");
+
+    em_t *radio_em;
+    for (auto &em : em_radios)
+    {
+            //check for null em pointer in vector
+            if (em == NULL) {
+                    em_printfout("Warning: Null em pointer in vector, skipping");
+                    continue;
+            }
+
+        mac_addr_str_t mac;
+        dm_easy_mesh_t::macbytes_to_string(em->get_radio_interface_mac(), mac);
+        printf("dhiyanesh  Em radio id: %s\n", mac);
+
+        em_printfout("dhiyanesh al_mac:%s\n", util::mac_to_string(dm->get_agent_al_interface_mac()).c_str());
+        printf("dhiyanesh RADIO: ruid=%s state=%d stored m_chan_req_msg_id=0x%04hx\n",
+               mac, em->get_state(),
+               em->m_chan_req_msg_id);
+
+    printf("dhiyanesh outside response_msg_id for channel = 0x%04hx,m_chan_req_msg_id = 0x%04hx\n",response_msg_id, radio_em->m_chan_req_msg_id);
+            if((em->get_state() == em_state_ctrl_channel_scan_pending) &&
+                                   (response_msg_id == radio_em->m_chan_req_msg_id)) {
+              printf("dhiyanesh inside response_msg_id for channel = 0x%04hx,m_chan_req_msg_id = 0x%04hx\n",response_msg_id, radio_em->m_chan_req_msg_id);
+              printf("dhiyanesh in handle channel scan request\n");
+              em->set_state(em_state_ctrl_configured);
+              radio_em->m_chan_req_msg_id = 0;
+              em_radios.clear();
+        } else {
+		printf("Msg ID or State is mismatch for radio ");
+                      return -1;
+              }
+     }
+}
+
 int em_channel_t::handle_channel_scan_req(unsigned char *buff, unsigned int len)
 {
     em_tlv_t    *tlv;
@@ -1777,6 +1896,7 @@ int em_channel_t::handle_channel_scan_req(unsigned char *buff, unsigned int len)
 	unsigned int i;
 
 	memset(&params, 0, sizeof(em_scan_params_t));
+    em_cmdu_t *cmdu = reinterpret_cast<em_cmdu_t *> (buff + sizeof(em_raw_hdr_t));
 
     tlv = reinterpret_cast<em_tlv_t *> (buff + sizeof(em_raw_hdr_t) + sizeof(em_cmdu_t));
     tlv_len = static_cast<int> (len - (sizeof(em_raw_hdr_t) + sizeof(em_cmdu_t)));
@@ -1807,6 +1927,8 @@ int em_channel_t::handle_channel_scan_req(unsigned char *buff, unsigned int len)
 		get_mgr()->io_process(em_bus_event_type_channel_scan_params,  reinterpret_cast<unsigned char *> (&params), sizeof(em_scan_params_t));
 	}
 
+	printf("dhiyanesh in handle channel scan request\n");
+	send_1905_ack_message_for_chan_scan(ntohs(cmdu->id));
 	return 0;
 }
 
@@ -1994,6 +2116,7 @@ void em_channel_t::process_msg(unsigned char *data, unsigned int len)
 
 		case em_msg_type_channel_scan_req:
             if (get_service_type() == em_service_type_agent) {
+		printf("called handle_channel_scan_req function");
                 handle_channel_scan_req(data, len);
             }
 			break;
@@ -2003,6 +2126,10 @@ void em_channel_t::process_msg(unsigned char *data, unsigned int len)
            		handle_channel_scan_rprt(data, len);
 			}
             break;
+	     
+	        case em_msg_type_1905_ack:
+			printf("calling handle_1905_ack for channel function");
+	    		handle_1905_ack(data, len);
 
         default:
             break;

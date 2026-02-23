@@ -271,6 +271,7 @@ public:
 	 * @note Ensure that the system is initialized before calling this function.
 	 */
 	int send_policy_cfg_request_msg();
+	int send_1905_ack_message(unsigned short msg_id);
 
     
 	/**!
@@ -288,7 +289,7 @@ public:
 	 * @note Ensure that the buffer is properly allocated and the length is correctly specified.
 	 */
 	int handle_policy_cfg_req(unsigned char *buff, unsigned int len);
-
+	int handle_1905_ack(unsigned char *buff, unsigned int len);
     
 	/**!
 	 * @brief Processes a message with the given data and length.

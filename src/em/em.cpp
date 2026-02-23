@@ -283,8 +283,8 @@ void em_t::proto_process(unsigned char *data, unsigned int len)
 
     cmdu = reinterpret_cast<em_cmdu_t *>(data + sizeof(em_raw_hdr_t));
 
-
     dm_easy_mesh_t::macbytes_to_string(get_radio_interface_mac(), mac_str);
+    printf("dhiyanesh in proto_process radio iface mac mac_str %s\n", mac_str);
     switch (htons(cmdu->type)) {
         case em_msg_type_autoconf_search:
         case em_msg_type_autoconf_resp:
@@ -346,7 +346,14 @@ void em_t::proto_process(unsigned char *data, unsigned int len)
                 em_configuration_t::process_msg(data, len);
             } else if (m_sm.get_state() == em_state_ctrl_sta_steer_pending) {
                 em_steering_t::process_msg(data, len);
-            }
+            } else if (m_sm.get_state() == em_state_ctrl_set_policy_pending) {
+                printf("dhiyanesh handle_1905_ack called for policy_cfg_req");
+                em_policy_cfg_t::process_msg(data, len);
+            } //else if (m_sm.get_state() == em_state_ctrl_channel_scan_pending) {
+	       else {
+                printf("dhiyanesh handle_1905_ack called for channel_scan_req");
+                em_channel_t::process_msg(data, len);
+	    }
             break;
 
         case em_msg_type_map_policy_config_req:

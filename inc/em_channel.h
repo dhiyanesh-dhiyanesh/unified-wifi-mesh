@@ -55,6 +55,7 @@ class em_channel_t {
 	 *
 	 */
 	int send_1905_ack_message(unsigned short msg_id);
+	int send_1905_ack_message_for_chan_scan(unsigned short msg_id);
 	/**!
 	 * @brief Pushes an event to the event manager.
 	 *
@@ -441,6 +442,7 @@ public:
 	 * @note Ensure the buffer is properly initialized before calling this function.
 	 */
 	int handle_channel_scan_req(unsigned char *buff, unsigned int len);
+	int handle_1905_ack(unsigned char *buff, unsigned int len);
     
 	/**!
 	 * @brief Handles the channel scan report.
@@ -741,7 +743,7 @@ public:
 
     unsigned int m_channel_pref_query_tx_cnt;
     unsigned int m_channel_sel_req_tx_cnt;
-    unsigned short m_chan_sel_req_msg_id;
+    unsigned short m_chan_req_msg_id;
 	
 	/**!
 	 * @brief Retrieves the frequency band.

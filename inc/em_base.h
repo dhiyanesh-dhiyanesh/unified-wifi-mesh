@@ -3086,6 +3086,7 @@ typedef struct {
     unsigned int arr_index;
     dm_orch_type_t  type;
     em_long_string_t        obj_id;
+    unsigned short msg_id;
 } em_cmd_ctx_t;
 
 typedef struct {
