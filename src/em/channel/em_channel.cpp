@@ -93,7 +93,7 @@ short em_channel_t::create_channel_pref_tlv_agent(unsigned char *buff, unsigned 
     return len;
 }
 
-int em_channel_t::send_1905_ack_message(unsigned short msg_id)
+int em_channel_t::send_1905_ack_message(unsigned short msg_id, bool ack_from)
 {
     unsigned char buff[MAX_EM_BUFF_SZ];
     char *errors[EM_MAX_TLV_MEMBERS] = {0};
@@ -105,17 +105,31 @@ int em_channel_t::send_1905_ack_message(unsigned short msg_id)
     unsigned short type = htons(ETH_P_1905);
     dm_easy_mesh_t *dm = get_data_model();
 
-    memcpy(tmp, dm->get_agent_al_interface_mac(), sizeof(mac_address_t));
-    tmp += sizeof(mac_address_t);
-    len += sizeof(mac_address_t);
+    if (ack_from == ACK_FROM_CTRL) {
+	    memcpy(tmp, dm->get_agent_al_interface_mac(), sizeof(mac_address_t));
+	    tmp += sizeof(mac_address_t);
+	    len += sizeof(mac_address_t);
+	    
+	    memcpy(tmp, dm->get_ctrl_al_interface_mac(), sizeof(mac_address_t));
+	    tmp += sizeof(mac_address_t);
+	    len += sizeof(mac_address_t);
 
-    memcpy(tmp, dm->get_ctrl_al_interface_mac(), sizeof(mac_address_t));
-    tmp += sizeof(mac_address_t);
-    len += sizeof(mac_address_t);
+	    memcpy(tmp, reinterpret_cast<unsigned char *> (&type), sizeof(unsigned short));
+	    tmp += sizeof(unsigned short);
+	    len += sizeof(unsigned short);
+    } else {
+	    memcpy(tmp, dm->get_ctrl_al_interface_mac(), sizeof(mac_address_t));
+	    tmp += sizeof(mac_address_t);
+	    len += static_cast<unsigned int> (sizeof(mac_address_t));
+	    
+	    memcpy(tmp, dm->get_agent_al_interface_mac(), sizeof(mac_address_t));
+	    tmp += sizeof(mac_address_t);
+	    len += static_cast<unsigned int> (sizeof(mac_address_t));
 
-    memcpy(tmp, reinterpret_cast<unsigned char *> (&type), sizeof(unsigned short));
-    tmp += sizeof(unsigned short);
-    len += sizeof(unsigned short);
+	    memcpy(tmp, reinterpret_cast<unsigned char *> (&type), sizeof(unsigned short));
+	    tmp += sizeof(unsigned short);
+	    len += static_cast<unsigned int> (sizeof(unsigned short));
+    }
 
     cmdu = reinterpret_cast<em_cmdu_t *> (tmp);
     memset(tmp, 0, sizeof(em_cmdu_t));
@@ -322,7 +336,7 @@ int em_channel_t::send_channel_scan_request_msg()
         return -1;
     }
 
-	set_state(em_state_ctrl_configured);
+    m_chan_req_msg_id = ntohs(cmdu->id);
 
     return  static_cast<int> (len);
 
@@ -693,7 +707,7 @@ int em_channel_t::send_channel_sel_request_msg()
         printf("%s:%d: Channel Selection Request msg failed, error:%d\n", __func__, __LINE__, errno);
         return -1;
     }
-    m_chan_sel_req_msg_id = ntohs(cmdu->id);
+    m_chan_req_msg_id = ntohs(cmdu->id);
 
     return static_cast<int> (len);
 
@@ -1720,9 +1734,9 @@ int em_channel_t::handle_channel_sel_rsp(unsigned char *buff, unsigned int len)
             dm_easy_mesh_t::macbytes_to_string(ruid, mac_str);
             em_t *radio_em = reinterpret_cast<em_t *>(hash_map_get(get_mgr()->m_em_map, mac_str));
             if (radio_em) {
-                if((radio_em->get_state() == em_state_ctrl_channel_select_pending) && (response_msg_id == radio_em->m_chan_sel_req_msg_id)) {
+                if((radio_em->get_state() == em_state_ctrl_channel_select_pending) && (response_msg_id == radio_em->m_chan_req_msg_id)) {
                     radio_em->set_state(em_state_ctrl_channel_selected);
-                    radio_em->m_chan_sel_req_msg_id = 0;
+                    radio_em->m_chan_req_msg_id = 0;
                     em_printfout("Set em_state_ctrl_channel_selected for radio %s", mac_str);
                 }
             } else {
@@ -1763,8 +1777,36 @@ int em_channel_t::handle_operating_channel_rprt(unsigned char *buff, unsigned in
         tlv = reinterpret_cast<em_tlv_t *> (reinterpret_cast<unsigned char *> (tlv) + sizeof(em_tlv_t) + htons(tlv->len));
     }
     em_printfout("Operating channel report recv\n");
-    send_1905_ack_message(ntohs(cmdu->id));
+    send_1905_ack_message(ntohs(cmdu->id), ACK_FROM_CTRL);
     return 0;
+}
+
+int em_channel_t::handle_1905_ack(unsigned char *buff, unsigned int len)
+{
+    dm_easy_mesh_t *dm;
+    std::vector<em_t *> em_radios;
+    em_cmdu_t *cmdu = reinterpret_cast<em_cmdu_t *> (buff + sizeof(em_raw_hdr_t));
+    unsigned short response_msg_id = ntohs(cmdu->id);
+    em_raw_hdr_t *hdr = reinterpret_cast<em_raw_hdr_t *>(buff);
+    get_mgr()->get_all_em_for_al_mac(hdr->src, em_radios);
+    dm = get_data_model();
+
+    for (auto &em : em_radios)
+    {
+        //check for null em pointer in vector
+        if (em == NULL) {
+            em_printfout("Warning: Null em pointer in vector, skipping");
+            continue;
+        }
+        mac_addr_str_t mac;
+        dm_easy_mesh_t::macbytes_to_string(em->get_radio_interface_mac(), mac);
+
+        if((em->get_state() == em_state_ctrl_channel_scan_pending) && (response_msg_id == em->m_chan_req_msg_id)) {
+            em->set_state(em_state_ctrl_configured);
+            em->m_chan_req_msg_id = 0;
+        }
+    }
+    em_radios.clear();
 }
 
 int em_channel_t::handle_channel_scan_req(unsigned char *buff, unsigned int len)
@@ -1777,6 +1819,7 @@ int em_channel_t::handle_channel_scan_req(unsigned char *buff, unsigned int len)
 	unsigned int i;
 
 	memset(&params, 0, sizeof(em_scan_params_t));
+    em_cmdu_t *cmdu = reinterpret_cast<em_cmdu_t *> (buff + sizeof(em_raw_hdr_t));
 
     tlv = reinterpret_cast<em_tlv_t *> (buff + sizeof(em_raw_hdr_t) + sizeof(em_cmdu_t));
     tlv_len = static_cast<int> (len - (sizeof(em_raw_hdr_t) + sizeof(em_cmdu_t)));
@@ -1807,6 +1850,7 @@ int em_channel_t::handle_channel_scan_req(unsigned char *buff, unsigned int len)
 		get_mgr()->io_process(em_bus_event_type_channel_scan_params,  reinterpret_cast<unsigned char *> (&params), sizeof(em_scan_params_t));
 	}
 
+	send_1905_ack_message(ntohs(cmdu->id), ACK_FROM_AGENT);
 	return 0;
 }
 
@@ -2003,6 +2047,9 @@ void em_channel_t::process_msg(unsigned char *data, unsigned int len)
            		handle_channel_scan_rprt(data, len);
 			}
             break;
+
+	        case em_msg_type_1905_ack:
+	    		handle_1905_ack(data, len);
 
         default:
             break;

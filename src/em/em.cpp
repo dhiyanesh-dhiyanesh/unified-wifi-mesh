@@ -346,6 +346,8 @@ void em_t::proto_process(unsigned char *data, unsigned int len)
                 em_configuration_t::process_msg(data, len);
             } else if (m_sm.get_state() == em_state_ctrl_sta_steer_pending) {
                 em_steering_t::process_msg(data, len);
+            } else {
+                process_ack_msg_by_state(data, len);
             }
             break;
 
@@ -364,6 +366,23 @@ void em_t::proto_process(unsigned char *data, unsigned int len)
     }
 
     free(data);
+}
+
+void em_t::process_ack_msg_by_state(unsigned char *data, unsigned int len)
+{
+    std::vector<em_t*> em_radios;
+    dm_easy_mesh_t *dm = get_data_model();
+    get_mgr()->get_all_em_for_al_mac(dm->get_agent_al_interface_mac(), em_radios);
+
+    for (auto &em : em_radios) {
+        em_state_t current_state = em->get_state();
+        if (current_state == em_state_ctrl_set_policy_pending) {
+            em_policy_cfg_t::process_msg(data, len);
+        } else if (current_state == em_state_ctrl_channel_scan_pending) {
+            em_channel_t::process_msg(data, len);
+        }
+    }
+    em_radios.clear();
 }
 
 void em_t::handle_agent_state()

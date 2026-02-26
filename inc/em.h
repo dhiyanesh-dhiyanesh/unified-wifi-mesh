@@ -106,6 +106,7 @@ class em_t :
 	 * @note Ensure that the data pointer is valid and the length is correct.
 	 */
 	void proto_process(unsigned char *data, unsigned int len);
+	void process_ack_msg_by_state(unsigned char *data, unsigned int len);
     
 	/**!
 	 * @brief Handles the protocol timeout event.
