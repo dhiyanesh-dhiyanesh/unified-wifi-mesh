@@ -70,6 +70,7 @@ public:
     static em_ctrl_t *get_em_ctrl_instance();
 
 	dm_easy_mesh_ctrl_t *get_dm_ctrl() { return &m_data_model; }
+	em_orch_ctrl_t *get_orch() { return m_orch; }
     
 	/**!
 	 * @brief Listens for input events and processes them accordingly.

@@ -207,6 +207,61 @@ void em_orch_t::cancel_command(em_cmd_type_t type, std::vector<em_t*> &em_radios
         }
     }
 
+    reset_cmd_time(m_cmd_map, type);
+}
+
+void em_orch_t::remove_command(em_cmd_type_t type, std::vector<em_t*> &em_radios)
+{
+    int i, j;
+    em_cmd_t *pcmd;
+    em_t *em;
+    mac_addr_str_t      mac_str;
+
+    for (i = static_cast<int>(queue_count(m_pending)) - 1; i >= 0; i--) {
+        pcmd = static_cast<em_cmd_t *>(queue_peek(m_pending, static_cast<unsigned int>(i)));
+        if (pcmd->m_type == type) {
+            for (j = static_cast<int>(queue_count(pcmd->m_em_candidates)) - 1; j >= 0; j--) {
+                em = static_cast<em_t *>(queue_peek(pcmd->m_em_candidates, static_cast<unsigned int>(j)));
+                for (auto &cur_em : em_radios) {
+                    if (cur_em == em) {
+                        dm_easy_mesh_t::macbytes_to_string(em->get_radio_interface_mac(), mac_str);
+                        printf("%s:%d: Removing em:%s from command type:%s\n", __func__, __LINE__, mac_str, em_cmd_t::get_cmd_type_str(type));
+                        queue_remove(pcmd->m_em_candidates, static_cast<unsigned int>(j));
+                       break;
+                    }
+                }
+            }
+            if (queue_count(pcmd->m_em_candidates) == 0){
+                queue_remove(m_pending, static_cast<unsigned int>(i));
+                pop_stats(pcmd);
+                destroy_command(pcmd);
+            }
+        }
+    }
+
+    for (i = static_cast<int>(queue_count(m_active)) - 1; i >= 0; i--) {
+        pcmd = static_cast<em_cmd_t *>(queue_peek(m_active, static_cast<unsigned int>(i)));
+        if (pcmd->m_type == type) {
+            for (j = static_cast<int>(queue_count(pcmd->m_em_candidates)) - 1; j >= 0; j--) {
+               em = static_cast<em_t *>(queue_peek(pcmd->m_em_candidates, static_cast<unsigned int>(j)));
+                for (auto &cur_em : em_radios)
+                {
+                    if (cur_em == em)
+                    {
+                        dm_easy_mesh_t::macbytes_to_string(em->get_radio_interface_mac(), mac_str);
+                        em_printfout("Setting em:%s State set to cancel", mac_str);
+                       //pre_process_cancel(pcmd, em);
+                        em->set_state(em_state_ctrl_unconfigured);
+                        em->set_topo_query_tx_count(0);
+                        em->set_channel_pref_query_tx_count(0);
+                        em->set_cap_query_tx_count(0);
+                        em->set_orch_state(em_orch_state_cancel);
+                    }
+                }
+            }
+        }
+    }
+
     // reset the elapsed time for the command type to avoid triggering timeouts for cancelled commands.
     reset_cmd_time(m_cmd_map, type);
 }

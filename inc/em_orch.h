@@ -220,6 +220,19 @@ public:
 	void cancel_command(em_cmd_type_t type);
 
 	/**!
+	 * @brief Removes a command of the specified type for specific EMs.
+	 *
+	 * This function is used to remove a command that is currently being processed for specific EMs.
+	 *
+	 * @param[in] type The type of command to remove. This parameter specifies which command
+	 * should be removed based on the em_cmd_type_t enumeration.
+	 * @param[in] em_radios Vector of EM pointers for which the command should be removed.
+	 *
+	 * @note Ensure that the command type provided is valid and currently active.
+	 */
+	void remove_command(em_cmd_type_t type, std::vector<em_t*> &em_radios);
+
+	/**!
 	 * @brief Resets the command time for a specific command type.
 	 *
 	 * This function is responsible for resetting the timer associated with a specific command type in the command map.

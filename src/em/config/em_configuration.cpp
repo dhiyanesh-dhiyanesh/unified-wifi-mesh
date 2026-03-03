@@ -5144,6 +5144,28 @@ int em_configuration_t::handle_autoconfig_wsc_m1(unsigned char *buff, unsigned i
         printf("%s:%d: autoconfig wsc m2 send failed, error:%d\n", __func__, __LINE__, errno);
         return -1;
     }
+
+    // remove previous em_config command if exists already.
+    dm_easy_mesh_t *dm = get_data_model();
+    std::vector<em_t *> all_em_radios;
+    get_mgr()->get_all_em_for_al_mac(dm->get_agent_al_interface_mac(), all_em_radios);
+    em_t * my_em = nullptr;
+    if (!all_em_radios.empty()) {
+        for (auto &em_radio : all_em_radios) {
+            if (memcmp(em_radio->get_radio_interface_mac(), get_radio_interface_mac(), sizeof(mac_address_t)) == 0) {
+                my_em = em_radio;
+                break;
+            }
+        }
+    }
+
+    std::vector<em_t*> my_em_vec;
+    if (my_em) {
+        my_em_vec.push_back(my_em);
+        printf("%s:%d: Removing previous em_config command for radio " MACSTRFMT "\n", __func__, __LINE__, MAC2STR(my_em->get_radio_interface_mac()));
+        static_cast<em_ctrl_t*>(get_mgr())->get_orch()->remove_command(em_cmd_type_em_config, my_em_vec);
+    }
+
 	set_state(em_state_ctrl_wsc_m2_sent);
 	printf("%s:%d: autoconfig wsc m2 send, len:%d\n", __func__, __LINE__, sz);
     memcpy(raw.al, const_cast<unsigned char *> (get_peer_mac()), sizeof(mac_address_t));
