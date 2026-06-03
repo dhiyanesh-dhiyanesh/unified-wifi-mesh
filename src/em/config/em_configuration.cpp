@@ -1369,7 +1369,63 @@ void em_configuration_t::print_ap_operational_bss_tlv(unsigned char *value, unsi
 
 int em_configuration_t::handle_bss_configuration_report(unsigned char *buff, unsigned int len)
 {
-	return 0;
+    mac_addr_str_t rd_mac_str, bss_mac_str;
+    em_bss_config_rprt_t *rprt;
+    em_radio_rprt_t *rd_rprt;
+    em_bss_rprt_t *bss_rprt;
+    dm_bss_t *dm_bss;
+    dm_easy_mesh_t *dm;
+    unsigned int i, j;
+    unsigned int all_bss_len = 0;
+
+    dm = get_data_model();
+    rprt = reinterpret_cast<em_bss_config_rprt_t *>(buff);
+    rd_rprt = rprt->radio_rprt;
+
+    em_printfout("Number of radios: %d", rprt->num_radios);
+
+    for (i = 0; i < rprt->num_radios; i++) {
+        dm_easy_mesh_t::macbytes_to_string(rd_rprt->ruid, rd_mac_str);
+        em_printfout("Radio: %s Number of BSS: %d", rd_mac_str, rd_rprt->num_bss);
+
+        bss_rprt = rd_rprt->bss_rprt;
+        for (j = 0; j < rd_rprt->num_bss; j++) {
+            dm_easy_mesh_t::macbytes_to_string(bss_rprt->bssid, bss_mac_str);
+
+            unsigned int ssid_len = bss_rprt->ssid_len;
+            em_printfout("BSSID: %s SSID: %.*s Flags: 0x%02x", bss_mac_str, ssid_len, bss_rprt->ssid, bss_rprt->desc);
+
+            dm_bss = dm->get_bss(rd_rprt->ruid, bss_rprt->bssid);
+            if (dm_bss == NULL) {
+                dm_bss = &dm->m_bss[dm->m_num_bss];
+                dm->set_num_bss(dm->get_num_bss() + 1);
+            }
+
+            // Fill up BSS information
+            strncpy(dm_bss->m_bss_info.id.net_id, dm->m_device.m_device_info.id.net_id, sizeof(em_long_string_t));
+            memcpy(dm_bss->m_bss_info.id.dev_mac, dm->m_device.m_device_info.intf.mac, sizeof(mac_address_t));
+            memcpy(dm_bss->m_bss_info.id.ruid, rd_rprt->ruid, sizeof(mac_address_t));
+            memcpy(dm_bss->m_bss_info.id.bssid, bss_rprt->bssid, sizeof(mac_address_t));
+            memcpy(dm_bss->m_bss_info.ruid.mac, rd_rprt->ruid, sizeof(mac_address_t));
+            memcpy(dm_bss->m_bss_info.bssid.mac, bss_rprt->bssid, sizeof(mac_address_t));
+
+            // Determine haul type from BSS list report flags
+            if (bss_rprt->desc == 0x60) {
+                dm_bss->m_bss_info.id.haul_type = em_haul_type_backhaul;
+            } else if (bss_rprt->desc == 0x80) {
+                dm_bss->m_bss_info.id.haul_type = em_haul_type_fronthaul;
+            } else {
+                em_printfout("BSSID %s: Unknown flag 0x%02x, keeping existing haul type", bss_mac_str, bss_rprt->desc);
+            }
+
+            // Fixed offset calculation: use offsetof to get fixed part size, then add ssid_len
+            all_bss_len += (offsetof(em_bss_rprt_t, ssid) + ssid_len);
+            bss_rprt = reinterpret_cast<em_bss_rprt_t *>(reinterpret_cast<unsigned char *>(bss_rprt) + offsetof(em_bss_rprt_t, ssid) + ssid_len);
+        }
+        rd_rprt = reinterpret_cast<em_radio_rprt_t *>(reinterpret_cast<unsigned char *>(rd_rprt) + sizeof(em_radio_rprt_t) + all_bss_len);
+        all_bss_len = 0;
+    }
+    return 0;
 }
 
 int em_configuration_t::handle_bsta_mld_config_req(unsigned char *buff, unsigned int len)
