@@ -4054,6 +4054,7 @@ int em_configuration_t::create_autoconfig_resp_msg(unsigned char* buff, em_freq_
     tlv->type = em_tlv_type_ctrl_cap;
     tlv->len = htons(sizeof(em_ctrl_cap_t));
     memset(&ctrl_cap, 0, sizeof(em_ctrl_cap_t));;
+    ctrl_cap.early_ap_capability = 1;
     memcpy(tlv->value, &ctrl_cap, sizeof(em_ctrl_cap_t));
 
     tmp += (sizeof(em_tlv_t) + sizeof(em_ctrl_cap_t));
@@ -5584,6 +5585,47 @@ int em_configuration_t::handle_autoconfig_wsc_m1(unsigned char *buff, unsigned i
 
         tlv_len -= static_cast<unsigned int> (sizeof(em_tlv_t) + htons(tlv->len));
         tlv = reinterpret_cast<em_tlv_t *> (reinterpret_cast<unsigned char *> (tlv) + sizeof(em_tlv_t) + htons(tlv->len));
+    }
+
+    dm_easy_mesh_t *dm = get_data_model();
+    if (dm->get_num_radios() > 0) {
+    em_ap_mld_info_t ap_mld_info;
+    memset(&ap_mld_info, 0, sizeof(em_ap_mld_info_t));
+
+    memcpy(ap_mld_info.mac_addr, get_peer_mac(), sizeof(mac_address_t));
+    ap_mld_info.mac_addr_valid = 1;
+
+    // Get fronthaul SSID
+    const em_network_ssid_info_t *net_ssid_info = dm->get_network_ssid_info_by_haul_type(em_haul_type_fronthaul);
+    if (net_ssid_info != NULL && strlen(net_ssid_info->ssid) > 0) {
+        strncpy(ap_mld_info.ssid, net_ssid_info->ssid, sizeof(ssid_t));
+    } else {
+        strncpy(ap_mld_info.ssid, "private_ssid", sizeof(ssid_t));
+    }
+
+    ap_mld_info.str = 1;
+    ap_mld_info.nstr = 0;
+    ap_mld_info.emlsr = 1;
+    ap_mld_info.emlmr = 0;
+
+    // Populate affiliated APs
+    ap_mld_info.num_affiliated_ap = 0;
+    for (unsigned int i = 0; i < dm->get_num_radios() && i < EM_MAX_AP_MLD; i++) {
+        dm_radio_t *radio = dm->get_radio(i);
+        if (radio != NULL) {
+            em_affiliated_ap_info_t *aff_ap = &ap_mld_info.affiliated_ap[ap_mld_info.num_affiliated_ap];
+            memset(aff_ap, 0, sizeof(em_affiliated_ap_info_t));
+
+            memcpy(aff_ap->ruid.mac, radio->m_radio_info.intf.mac, sizeof(mac_address_t));
+            aff_ap->mac_addr_valid = 1;
+            aff_ap->link_id_valid = 0;
+	    aff_ap->link_id = i + 1;
+
+            ap_mld_info.num_affiliated_ap++;
+        }
+    }
+
+    dm->update_ap_mld_info(&ap_mld_info);
     }
 
     int ret = create_autoconfig_wsc_m2_msg(msg, ntohs(cmdu->id));

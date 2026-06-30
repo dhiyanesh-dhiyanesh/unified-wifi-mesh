@@ -3429,6 +3429,9 @@ void dm_easy_mesh_t::update_ap_mld_info(em_ap_mld_info_t *ap_mld_info)
     target_mld->emlsr = ap_mld_info->emlsr;
     target_mld->emlmr = ap_mld_info->emlmr;
 
+    // RESET affiliated AP count before processing
+    target_mld->num_affiliated_ap = 0;
+
     // Loop through all affiliated APs
     for (int j = 0; j < ap_mld_info->num_affiliated_ap; j++) {
         em_affiliated_ap_info_t *input_ap = &ap_mld_info->affiliated_ap[j];
@@ -3436,7 +3439,7 @@ void dm_easy_mesh_t::update_ap_mld_info(em_ap_mld_info_t *ap_mld_info)
         bool aff_ap_found = false;
 
         for (int k = 0; k < target_mld->num_affiliated_ap; k++) {
-            if (memcmp(target_mld->affiliated_ap[k].mac_addr, input_ap->mac_addr, sizeof(mac_address_t)) == 0) {
+            if (memcmp(target_mld->affiliated_ap[k].mac_addr, input_ap->ruid.mac, sizeof(mac_address_t)) == 0) {
                 target_aff_ap = &target_mld->affiliated_ap[k];
                 aff_ap_found = true;
                 em_printfout("Found existing affiliated AP at index %d", k);
