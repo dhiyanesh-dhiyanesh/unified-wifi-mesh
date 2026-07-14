@@ -3865,14 +3865,75 @@ int em_configuration_t::create_autoconfig_wsc_m2_msg(unsigned char *buff, unsign
         return 0;
     }
 
-    // ap mld tlv 17.2.96
-    tlv =reinterpret_cast<em_tlv_t *> (tmp);
-    tlv->type = em_tlv_type_ap_mld_config;
-    sz = static_cast<short unsigned int> (create_ap_mld_config_tlv(tlv->value));
-    tlv->len = htons(sz);
+    bool mlo_supported = false;
+    dm_easy_mesh_t *dm = get_data_model();
+    if (dm && dm->get_num_radios() > 0) {
+        em_ap_mld_info_t ap_mld_info;
+	    memset(&ap_mld_info, 0, sizeof(em_ap_mld_info_t));
 
-    tmp += (sizeof(em_tlv_t) + sz);
-    len += static_cast<int> (sizeof(em_tlv_t) + sz);
+	    // Populate AP MLD MAC address
+	    memset(ap_mld_info.mac_addr, 0, sizeof(mac_address_t));
+	    ap_mld_info.mac_addr_valid = 0;
+
+	    // Populate AP MLD SSID using the fronthaul network SSID.
+	    const em_network_ssid_info_t *net_ssid_info = dm->get_network_ssid_info_by_haul_type(em_haul_type_fronthaul);
+	    if (net_ssid_info != NULL && strlen(net_ssid_info->ssid) > 0) {
+	        strncpy(ap_mld_info.ssid, net_ssid_info->ssid, sizeof(ssid_t));
+	    } else {
+	        em_printfout("Unable to populate AP MLD SSID: fronthaul SSID information is unavailable\n");
+	    }
+
+        // Collect MLO capabilities from all radios.
+	    for (unsigned int i = 0; i < dm->get_num_radios(); i++) {
+	        const em_wifi7_mlo_cap_support_tlv_t &mlo_cap = dm->get_radio_cap_info(i)->wifi7_cap.mlo_cap_support;
+
+	        ap_mld_info.str   |= mlo_cap.ap_str_support;
+	        ap_mld_info.nstr  |= mlo_cap.ap_nstr_support;
+	        ap_mld_info.emlsr |= mlo_cap.ap_emlsr_support;
+	        ap_mld_info.emlmr |= mlo_cap.ap_emlmr_support;
+
+	        // Check if at least one radio supports MLO features.
+	        if (mlo_cap.ap_str_support || mlo_cap.ap_nstr_support || mlo_cap.ap_emlsr_support || mlo_cap.ap_emlmr_support) {
+		        mlo_supported = true;
+	        }
+	    }
+
+	    if (mlo_supported) {
+            ap_mld_info.num_affiliated_ap = 0;
+
+	        // Build affiliated AP information for each radio.
+	        for (unsigned int i = 0; i < dm->get_num_radios() && i < EM_MAX_AP_MLD; i++) {
+                dm_radio_t *radio = dm->get_radio(i);
+		        if (radio != NULL) {
+		            em_affiliated_ap_info_t *aff_ap = &ap_mld_info.affiliated_ap[ap_mld_info.num_affiliated_ap];
+		            memset(aff_ap, 0, sizeof(em_affiliated_ap_info_t));
+		            // Populate affiliated AP RUID from radio MAC.
+		            memcpy(aff_ap->ruid.mac, radio->m_radio_info.intf.mac, sizeof(mac_address_t));
+
+		            aff_ap->link_id = i + 1;
+		            aff_ap->link_id_valid = 0;
+		            aff_ap->mac_addr_valid = 0;
+		            ap_mld_info.num_affiliated_ap++;
+                }
+            }
+            // Store the generated AP MLD information in the data model.
+            dm->update_ap_mld_info(&ap_mld_info);
+        }
+    }
+
+    // ap mld tlv 17.2.96
+    // Add AP MLD Configuration TLV only if MLO is supported.
+    if (mlo_supported) {
+        tlv = reinterpret_cast<em_tlv_t *> (tmp);
+	    tlv->type = em_tlv_type_ap_mld_config;
+	    sz = static_cast<short unsigned int> (create_ap_mld_config_tlv(tlv->value));
+	    tlv->len = htons(sz);
+
+	    tmp += (sizeof(em_tlv_t) + sz);
+	    len += static_cast<int>(sizeof(em_tlv_t) + sz);
+    } else {
+        em_printfout("Agent is not MLD capable, skipping AP MLD Config TLV");
+    }
 
     // End of message
     tlv = reinterpret_cast<em_tlv_t *> (tmp);
@@ -4054,6 +4115,7 @@ int em_configuration_t::create_autoconfig_resp_msg(unsigned char* buff, em_freq_
     tlv->type = em_tlv_type_ctrl_cap;
     tlv->len = htons(sizeof(em_ctrl_cap_t));
     memset(&ctrl_cap, 0, sizeof(em_ctrl_cap_t));;
+    ctrl_cap.early_ap_capability = 1;
     memcpy(tlv->value, &ctrl_cap, sizeof(em_ctrl_cap_t));
 
     tmp += (sizeof(em_tlv_t) + sizeof(em_ctrl_cap_t));
