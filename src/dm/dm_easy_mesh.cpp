@@ -3464,13 +3464,23 @@ void dm_easy_mesh_t::update_ap_mld_info(em_ap_mld_info_t *ap_mld_info)
         em_affiliated_ap_info_t *input_ap = &ap_mld_info->affiliated_ap[j];
         em_affiliated_ap_info_t *target_aff_ap = NULL;
         bool aff_ap_found = false;
-
         for (int k = 0; k < target_mld->num_affiliated_ap; k++) {
-            if (memcmp(target_mld->affiliated_ap[k].mac_addr, input_ap->mac_addr, sizeof(mac_address_t)) == 0) {
-                target_aff_ap = &target_mld->affiliated_ap[k];
-                aff_ap_found = true;
-                em_printfout("Found existing affiliated AP at index %d", k);
-                break;
+            // Match affiliated AP using AP MAC address.
+            if (input_ap->mac_addr_valid) {
+                if (memcmp(target_mld->affiliated_ap[k].mac_addr, input_ap->mac_addr, sizeof(mac_address_t)) == 0) {
+                    target_aff_ap = &target_mld->affiliated_ap[k];
+                    aff_ap_found = true;
+                    em_printfout("Found existing affiliated AP by AP MAC at index %d", k);
+                    break;
+                }
+            // During initial onboarding AP MAC may not be available, match using RUID.
+            } else {
+                if (memcmp(target_mld->affiliated_ap[k].ruid.mac, input_ap->ruid.mac, sizeof(mac_address_t)) == 0) {
+                    target_aff_ap = &target_mld->affiliated_ap[k];
+                    aff_ap_found = true;
+                    em_printfout("Found existing affiliated AP by RUID at index %d", k);
+                    break;
+                }
             }
         }
 
@@ -3486,7 +3496,6 @@ void dm_easy_mesh_t::update_ap_mld_info(em_ap_mld_info_t *ap_mld_info)
             target_mld->num_affiliated_ap++;
         }
 
-        // Update affiliated AP fields
         target_aff_ap->mac_addr_valid = input_ap->mac_addr_valid;
         target_aff_ap->link_id_valid = input_ap->link_id_valid;
         target_aff_ap->ruid = input_ap->ruid;
