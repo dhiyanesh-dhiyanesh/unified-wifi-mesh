@@ -312,6 +312,7 @@ void em_t::proto_process(unsigned char *data, unsigned int len)
         case em_msg_type_ap_cap_rprt:
         case em_msg_type_client_cap_query:
         case em_msg_type_client_cap_rprt:
+        case em_msg_type_early_ap_cap_rprt:
             em_capability_t::process_msg(data, len);
             break;
 
@@ -2635,7 +2636,7 @@ int em_t::handle_wifi6_cap_tlv(unsigned char *buff)
         em_printfout("\t\tmcs_nss_num: %d", em_wifi6_cap->roles[i].role_head.mcs_nss_num);
         for(int j = 0; j < em_wifi6_cap->roles[i].role_head.mcs_nss_num/EM_MIN_HE_MCS_LEN; j++) {
             em_printfout("\t\tmac_nss Tx[%d] = %hu, Rx[%d] = %hu", j, em_wifi6_cap->roles[i].sprt_tx_rx_mcs[j].tx_he_mcs,
-                em_wifi6_cap->roles[i].sprt_tx_rx_mcs[j].rx_he_mcs);
+                j, em_wifi6_cap->roles[i].sprt_tx_rx_mcs[j].rx_he_mcs);
         }
     }
     return 0;

@@ -249,6 +249,240 @@ static inline unsigned char get_bss_type_for_haul(em_haul_type_t haul_type)
     return (haul_type == em_haul_type_backhaul) ? EM_MULTI_AP_EXT_BSS_BACKHAUL : EM_MULTI_AP_EXT_BSS_FRONTHAUL;
 }
 
+static bool is_mlo_link_enabled_for_haul(dm_easy_mesh_t *dm, em_haul_type_t haul_type, unsigned int radio_index)
+{
+    dm_radio_t *radio;
+    const em_mlo_policy_t *policy;
+    uint8_t band;
+    bool link_enabled;
+
+    if ((dm == NULL) || (radio_index >= EM_MAX_BANDS)) {
+        return false;
+    }
+
+    if ((haul_type != em_haul_type_fronthaul) && (haul_type != em_haul_type_backhaul)) {
+        return false;
+    }
+
+    radio = dm->get_radio(radio_index);
+    if (radio == NULL) {
+        return false;
+    }
+
+    band = 0;
+    if (radio->m_radio_info.band == em_freq_band_24) {
+        band = EM_RF_24GHZ;
+    } else if (radio->m_radio_info.band == em_freq_band_5) {
+        band = EM_RF_50GHZ;
+    } else if (radio->m_radio_info.band == em_freq_band_6) {
+        band = EM_RF_6GHZ;
+    }
+
+    if (band == 0) {
+        return false;
+    }
+
+    policy = dm->get_mlo_policy(haul_type);
+    if (policy == NULL) {
+        return false;
+    }
+
+    link_enabled = ((policy->band_bitmap & band) != 0);
+
+    em_printfout("MLO link policy for haul=%d radio=%u is %s",
+                 haul_type, radio_index, link_enabled ? "enabled" : "disabled");
+    return link_enabled;
+}
+
+static void cleanup_ap_mld_entries_for_active_hauls(dm_easy_mesh_t *dm)
+{
+    em_network_ssid_info_t *fronthaul_info;
+    em_network_ssid_info_t *backhaul_info;
+    const char *fronthaul_ssid = NULL;
+    const char *backhaul_ssid = NULL;
+    unsigned int idx = 0;
+    em_ap_mld_info_t *mld_info = NULL;
+    bool keep = false;
+    ssid_t stale_ssid = {0};
+
+    if (dm == NULL) {
+        em_printfout("Data model is NULL, cannot prune stale AP MLD entries");
+        return;
+    }
+
+    fronthaul_info = dm->get_network_ssid_info_by_haul_type(em_haul_type_fronthaul);
+    backhaul_info = dm->get_network_ssid_info_by_haul_type(em_haul_type_backhaul);
+
+    if ((fronthaul_info != NULL) && (fronthaul_info->ssid[0] != '\0')) {
+        fronthaul_ssid = fronthaul_info->ssid;
+    }
+    if ((backhaul_info != NULL) && (backhaul_info->ssid[0] != '\0')) {
+        backhaul_ssid = backhaul_info->ssid;
+    }
+
+    if ((fronthaul_ssid == NULL) && (backhaul_ssid == NULL)) {
+        em_printfout("No active fronthaul or backhaul SSIDs");
+        return;
+    }
+
+    while (idx < dm->get_num_ap_mld()) {
+        mld_info = &dm->m_ap_mld[idx].m_ap_mld_info;
+        keep = false;
+
+        if (mld_info->ssid[0] == '\0') {
+            em_printfout("Skipping empty AP MLD entry idx=%u", idx);
+            idx++;
+            continue;
+        }
+
+        if ((fronthaul_ssid != NULL) && (strncmp(mld_info->ssid, fronthaul_ssid, sizeof(ssid_t)) == 0)) {
+            keep = true;
+        } else if ((backhaul_ssid != NULL) && (strncmp(mld_info->ssid, backhaul_ssid, sizeof(ssid_t)) == 0)) {
+            keep = true;
+        }
+
+        if (keep) {
+            em_printfout("Keeping AP MLD entry idx=%u ssid=\"%s\" mac=%s",
+                idx, mld_info->ssid,
+                util::mac_to_string(mld_info->mac_addr).c_str());
+            idx++;
+            continue;
+        }
+
+        strncpy(stale_ssid, mld_info->ssid, sizeof(ssid_t) - 1);
+        em_printfout("Removing stale AP MLD entry idx=%u ssid=\"%s\" mac=%s",
+                idx, stale_ssid,
+                util::mac_to_string(mld_info->mac_addr).c_str());
+
+        dm->remove_ap_mld_info(stale_ssid);
+    }
+}
+
+static bool update_ap_mld_for_haul(dm_easy_mesh_t *dm, em_haul_type_t haul)
+{
+    const em_mlo_policy_t *policy;
+    const em_network_ssid_info_t *net_ssid_info;
+    em_ap_mld_info_t ap_mld_info;
+    em_ap_mld_info_t *existing_ap_mld;
+    uint8_t mode_bitmap;
+    unsigned int i, r;
+    em_radio_cap_info_t *radio_cap_info;
+    em_wifi7_mlo_cap_support_tlv_t mlo_cap;
+    dm_radio_t *dm_radio;
+    em_affiliated_ap_info_t *aff_ap;
+    bool has_wifi7_cap, cap_str, cap_nstr, cap_emlsr, cap_emlmr;
+
+    if ((dm == NULL) || (dm->get_num_radios() == 0)) {
+        return false;
+    }
+
+    if ((haul != em_haul_type_fronthaul) && (haul != em_haul_type_backhaul)) {
+        return false;
+    }
+
+    policy = dm->get_mlo_policy(haul);
+    net_ssid_info = dm->get_network_ssid_info_by_haul_type(haul);
+    if ((net_ssid_info == NULL) || (strlen(net_ssid_info->ssid) == 0)) {
+        em_printfout("Skipping AP MLD policy for haul=%d due to missing SSID", haul);
+        return false;
+    }
+
+    if (policy == NULL) {
+        em_printfout("No MLO policy found for haul=%d; skipping AP MLD TLV participation",
+            haul);
+        return false;
+    }
+
+    if (!policy->use_mld_tlv) {
+        em_printfout("AP MLD disabled for haul=%d", haul);
+        return false;
+    }
+
+    existing_ap_mld = dm->get_ap_mld_frm_ssid(net_ssid_info->ssid);
+    if (existing_ap_mld != NULL) {
+        em_printfout("Existing AP MLD present for haul=%d ssid=\"%s\"", haul, net_ssid_info->ssid);
+        return true;
+    }
+
+    memset(&ap_mld_info, 0, sizeof(em_ap_mld_info_t));
+    ap_mld_info.mac_addr_valid = 0;
+    memset(ap_mld_info.mac_addr, 0, sizeof(mac_address_t));
+    strncpy(ap_mld_info.ssid, net_ssid_info->ssid, sizeof(ssid_t) - 1);
+
+    mode_bitmap = policy->mode_bitmap;
+    ap_mld_info.str   = (mode_bitmap & EM_MLO_MODE_STR) != 0;
+    ap_mld_info.nstr  = (mode_bitmap & EM_MLO_MODE_NSTR) != 0;
+    ap_mld_info.emlsr = (mode_bitmap & EM_MLO_MODE_EMLSR) != 0;
+    ap_mld_info.emlmr = (mode_bitmap & EM_MLO_MODE_EMLMR) != 0;
+
+    has_wifi7_cap = false;
+    cap_str = false;
+    cap_nstr = false;
+    cap_emlsr = false;
+    cap_emlmr = false;
+    memset(&mlo_cap, 0, sizeof(em_wifi7_mlo_cap_support_tlv_t));
+
+    // Collect MLO capabilities from all radios and override defaults when available.
+    for (i = 0; i < dm->get_num_radios(); i++) {
+        radio_cap_info = dm->get_radio_cap_info(i);
+        if (radio_cap_info == NULL) {
+            continue;
+        }
+
+        mlo_cap = radio_cap_info->wifi7_cap.mlo_cap_support;
+        has_wifi7_cap = true;
+        cap_str   |= (mlo_cap.ap_str_support != 0);
+        cap_nstr  |= (mlo_cap.ap_nstr_support != 0);
+        cap_emlsr |= (mlo_cap.ap_emlsr_support != 0);
+        cap_emlmr |= (mlo_cap.ap_emlmr_support != 0);
+    }
+
+    if (has_wifi7_cap) {
+        ap_mld_info.str = cap_str;
+        ap_mld_info.nstr = cap_nstr;
+        ap_mld_info.emlsr = cap_emlsr;
+        ap_mld_info.emlmr = cap_emlmr;
+    }
+
+    ap_mld_info.num_affiliated_ap = 0;
+    dm_radio = NULL;
+    aff_ap = NULL;
+    for (r = 0; r < dm->get_num_radios() && r < EM_MAX_AP_MLD; r++) {
+        if (!is_mlo_link_enabled_for_haul(dm, haul, r)) {
+            em_printfout("Skipping affiliated link for haul=%d radio=%u due to link policy disable",
+                haul, r);
+            continue;
+        }
+
+        dm_radio = dm->get_radio(r);
+        if (dm_radio == NULL) {
+            continue;
+        }
+
+        aff_ap = &ap_mld_info.affiliated_ap[ap_mld_info.num_affiliated_ap];
+        memset(aff_ap, 0, sizeof(em_affiliated_ap_info_t));
+
+        memcpy(aff_ap->ruid.mac, dm_radio->m_radio_info.intf.mac, sizeof(mac_address_t));
+        aff_ap->link_id = r;
+        aff_ap->link_id_valid = 1;
+
+        aff_ap->mac_addr_valid = 0;
+        memset(aff_ap->mac_addr, 0, sizeof(mac_address_t));
+        ap_mld_info.num_affiliated_ap++;
+    }
+
+    if (ap_mld_info.num_affiliated_ap == 0) {
+        em_printfout("haul=%d No links are enabled; skipping AP MLD entry",
+            haul);
+        return false;
+    }
+
+    em_printfout("AP MLD policy haul=%d mode_bitmap=0x%02x STR=%d NSTR=%d EMLSR=%d EMLMR=%d ssid=\"%s\"",
+        haul, mode_bitmap, ap_mld_info.str, ap_mld_info.nstr, ap_mld_info.emlsr, ap_mld_info.emlmr, net_ssid_info->ssid);
+    dm->update_ap_mld_info(&ap_mld_info);
+    return true;
+}
+
 /* Translate WPS RF Band to 1905 AutoFreq Band */
 static int translate_from_rfband_to_band(uint8_t rfband)
 {
@@ -3855,8 +4089,13 @@ int em_configuration_t::create_autoconfig_wsc_m2_msg(unsigned char *buff, unsign
     unsigned short sz = 0;
     unsigned short type = htons(ETH_P_1905);
     dm_radio_t *radio;
+    dm_easy_mesh_t *dm;
+    bool add_ap_mld_tlv = false;
 
     radio = get_radio_from_dm();
+
+    dm = get_data_model();
+    cleanup_ap_mld_entries_for_active_hauls(dm);
 
     // first compute keys
     if (compute_keys(get_e_public(), static_cast<short unsigned int> (get_e_public_len()), get_r_private(), static_cast<short unsigned int> (get_r_private_len())) != 1) {
@@ -3917,6 +4156,10 @@ int em_configuration_t::create_autoconfig_wsc_m2_msg(unsigned char *buff, unsign
         tlv->len = htons(sz);
         tmp += (sizeof(em_tlv_t) + sz);
         len += static_cast<int> (sizeof(em_tlv_t) + sz);
+
+        if (update_ap_mld_for_haul(dm, static_cast<em_haul_type_t>(i))) {
+            add_ap_mld_tlv = true;
+        }
     }
 
     if(is_m2_present == false) {
@@ -3926,13 +4169,18 @@ int em_configuration_t::create_autoconfig_wsc_m2_msg(unsigned char *buff, unsign
     }
 
     // ap mld tlv 17.2.96
-    tlv =reinterpret_cast<em_tlv_t *> (tmp);
-    tlv->type = em_tlv_type_ap_mld_config;
-    sz = static_cast<short unsigned int> (create_ap_mld_config_tlv(tlv->value));
-    tlv->len = htons(sz);
+    // Add AP MLD Configuration TLV
+    if (add_ap_mld_tlv) {
+        tlv = reinterpret_cast<em_tlv_t *> (tmp);
+	    tlv->type = em_tlv_type_ap_mld_config;
+	    sz = static_cast<short unsigned int> (create_ap_mld_config_tlv(tlv->value));
+	    tlv->len = htons(sz);
 
-    tmp += (sizeof(em_tlv_t) + sz);
-    len += static_cast<int> (sizeof(em_tlv_t) + sz);
+	    tmp += (sizeof(em_tlv_t) + sz);
+	    len += static_cast<int>(sizeof(em_tlv_t) + sz);
+    } else {
+        em_printfout("No AP MLD Config TLV included");
+    }
 
     // End of message
     tlv = reinterpret_cast<em_tlv_t *> (tmp);
@@ -4122,6 +4370,7 @@ int em_configuration_t::create_autoconfig_resp_msg(unsigned char* buff, em_freq_
     tlv->type = em_tlv_type_ctrl_cap;
     tlv->len = htons(sizeof(em_ctrl_cap_t));
     memset(&ctrl_cap, 0, sizeof(em_ctrl_cap_t));;
+    ctrl_cap.early_ap_capability = 1;
     memcpy(tlv->value, &ctrl_cap, sizeof(em_ctrl_cap_t));
 
     tmp += (sizeof(em_tlv_t) + sizeof(em_ctrl_cap_t));
@@ -5772,7 +6021,12 @@ int em_configuration_t::handle_autoconfig_resp(unsigned char *buff, unsigned int
     unsigned char msg[MAX_EM_BUFF_SZ];
     unsigned int sz;
     char *errors[EM_MAX_TLV_MEMBERS] = {0};
+    bool early_ap_cap_requested = false;
+    em_tlv_t *ctrl_cap_tlv;
+    const em_ctrl_cap_t *ctrl_cap;
+    int early_cap_len = 0;
     em_raw_hdr_t *hdr = reinterpret_cast<em_raw_hdr_t *> (buff);
+    em_cmdu_t *cmdu = reinterpret_cast<em_cmdu_t *> (buff + sizeof(em_raw_hdr_t));
 
     em_printfout("Received autoconfig resp from " MACSTRFMT, MAC2STR(hdr->src));
 
@@ -5803,6 +6057,25 @@ int em_configuration_t::handle_autoconfig_resp(unsigned char *buff, unsigned int
         // Set peer AL MAC to controller AL MAC
         memcpy(ec_mgr.get_al_conn_ctx(NULL)->peer_al_mac, hdr->src, sizeof(mac_address_t));
         return get_ec_mgr().start_secure_1905_layer(hdr->src) ? 0 : -1;
+    }
+
+    ctrl_cap_tlv = em_msg_t(buff + sizeof(em_raw_hdr_t) + sizeof(em_cmdu_t),
+            len - static_cast<unsigned int>(sizeof(em_raw_hdr_t) + sizeof(em_cmdu_t))).get_tlv(em_tlv_type_ctrl_cap);
+    if ((ctrl_cap_tlv != nullptr) && (ntohs(ctrl_cap_tlv->len) >= sizeof(em_ctrl_cap_t))) {
+        ctrl_cap = reinterpret_cast<const em_ctrl_cap_t *>(ctrl_cap_tlv->value);
+        early_ap_cap_requested = (ctrl_cap->early_ap_capability != 0);
+    }
+
+    if (early_ap_cap_requested) {
+        early_cap_len = static_cast<em_t *>(this)->send_early_ap_cap_report_msg(buff, ntohs(cmdu->id));
+        if (early_cap_len < 0) {
+            em_printfout("Error: Failed to send Early AP Capability Report message");
+            return -1;
+        }
+        em_printfout("Early AP Capability Report sent");
+        // ToDo : Need to debug why this sleep is required here.
+        // It is added to avoid the M1 message being sent before the Early AP Capability Report message is sent.
+        usleep(10000);
     }
 
     printf("Received resp and validated...creating M1 msg\n");

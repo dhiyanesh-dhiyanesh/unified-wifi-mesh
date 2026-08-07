@@ -96,6 +96,7 @@ public:
 
     unsigned int m_num_unassoc_sta_metrics;
     em_unassoc_sta_metric_entry_t  m_unassoc_sta_metrics[EM_MAX_UNASSOC_STA];
+    em_mlo_policy_t m_mlo_policy[EM_MLO_POLICY_HAUL_COUNT];
 
 public:
 
@@ -1207,6 +1208,9 @@ public:
 	 */
 	em_network_ssid_info_t *get_network_ssid_info_by_haul_type(em_haul_type_t haul_type);
 
+	const em_mlo_policy_t *get_mlo_policy(em_haul_type_t haul) const;
+	void set_mlo_policy(em_haul_type_t haul, const em_mlo_policy_t *policy);
+
 	/**!
      * @brief Checks whether the given SSID matches.
      *
@@ -1746,6 +1750,9 @@ public:
 	em_ap_mld_info_t *get_ap_mld_frm_bssid(mac_address_t bss_id);
 	static em_ap_mld_info_t *get_ap_mld_frm_bssid(void *dm, mac_address_t bss_id) { return (static_cast<dm_easy_mesh_t *>(dm))->get_ap_mld_frm_bssid(bss_id); }
 
+	em_ap_mld_info_t *get_ap_mld_frm_ssid(const ssid_t ssid);
+	static em_ap_mld_info_t *get_ap_mld_frm_ssid(void *dm, const ssid_t ssid) { return (static_cast<dm_easy_mesh_t *>(dm))->get_ap_mld_frm_ssid(ssid); }
+
 	void update_ap_mld_info(em_ap_mld_info_t *ap_mld_info);
 	static void update_ap_mld_info(void *dm, em_ap_mld_info_t *ap_mld_info) { (static_cast<dm_easy_mesh_t *>(dm))->update_ap_mld_info(ap_mld_info); }
 
@@ -1755,6 +1762,7 @@ public:
 	void update_assoc_sta_mld_info(em_assoc_sta_mld_info_t *assoc_sta_mld_info);
 	static void update_assoc_sta_mld_info(void *dm, em_assoc_sta_mld_info_t *assoc_sta_mld_info) { (static_cast<dm_easy_mesh_t *>(dm))->update_assoc_sta_mld_info(assoc_sta_mld_info); }
 
+	void remove_ap_mld_info(const ssid_t ssid);
 	void remove_assoc_sta_mld_info(mac_address_t sta_mld_mac);
 	bool is_ap_mld_mac(const mac_address_t mac);
 	bool resolve_ap_mld_to_fallback_ruid(const mac_address_t ap_mld_mac, mac_address_t fallback_ruid);
